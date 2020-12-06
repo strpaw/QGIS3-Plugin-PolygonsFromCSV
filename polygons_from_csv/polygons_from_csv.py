@@ -23,13 +23,14 @@
 """
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction
+from qgis.PyQt.QtWidgets import QAction, QWidget, QMessageBox
 
 # Initialize Qt resources from file resources.py
 from .resources import *
 # Import the code for the dialog
 from .polygons_from_csv_dialog import PolygonsFromCSVDialog
 import os.path
+import csv
 
 
 class PolygonsFromCSV:
@@ -43,6 +44,7 @@ class PolygonsFromCSV:
             application at run time.
         :type iface: QgsInterface
         """
+        self.csv_fields = None
         # Save reference to the QGIS interface
         self.iface = iface
         # initialize plugin directory
@@ -180,9 +182,45 @@ class PolygonsFromCSV:
             self.iface.removeToolBarIcon(action)
 
     def remove_csv_fields_assignment(self):
+        """ Remove CSV fields from dropdown lists. """
         self.dlg.comboBoxFieldPolygonName.clear()
         self.dlg.comboBoxFieldLongitude.clear()
         self.dlg.comboBoxFieldLatitude.clear()
+
+    def fill_drodown_list(self):
+        """ Add CSV fields to dropdown lists. """
+        self.dlg.comboBoxFieldPolygonName.addItems(self.csv_fields)
+        self.dlg.comboBoxFieldLongitude.addItems(self.csv_fields)
+        self.dlg.comboBoxFieldLatitude.addItems(self.csv_fields)
+
+    def reset_csv_fields_assignment(self):
+        """ Read fields from CSV input file and fill dropdown lists with them if there are 3 r more
+        fields in CSV file. """
+        input_path = self.dlg.mQgsFileWidgetInputFile.filePath()
+        if os.path.isfile(input_path):
+            with open(input_path, 'r') as file:
+                delimiter = self.dlg.comboBoxCSVDelimiter.currentText()
+                reader = csv.DictReader(file, delimiter=delimiter)
+                header = reader.fieldnames
+                fields_count = len(header)
+                if fields_count >= 3:
+                    self.csv_fields = header
+                    self.remove_csv_fields_assignment()
+                    self.fill_drodown_list()
+                else:
+                    self.remove_csv_fields_assignment()
+                    self.csv_fields = None
+                    QMessageBox.critical(QWidget(), "Message", "At least 3 fields required!")
+
+    def create_polygons_from_csv_file(self):
+        input_path = self.dlg.mQgsFileWidgetInputFile.filePath()
+
+        if input_path.strip() == "":
+            QMessageBox.critical(QWidget(), "Message", "Select input CSV file!")
+        elif os.path.isfile(input_path):
+            pass
+        else:
+            QMessageBox.critical(QWidget(), "Message", "{} is not a file!".format(input_path))
 
     def run(self):
         """Run method that performs all the real work"""
@@ -192,6 +230,10 @@ class PolygonsFromCSV:
         if self.first_start == True:
             self.first_start = False
             self.dlg = PolygonsFromCSVDialog()
+            self.dlg.pushButtonCreatePolygons.clicked.connect(self.create_polygons_from_csv_file)
+            self.dlg.comboBoxCSVDelimiter.currentIndexChanged.connect(self.reset_csv_fields_assignment)
+            self.dlg.mQgsFileWidgetInputFile.fileChanged.connect(self.reset_csv_fields_assignment)
+            self.dlg.mQgsFileWidgetInputFile.setFilter('*.csv')
 
         # show the dialog
         self.dlg.show()
