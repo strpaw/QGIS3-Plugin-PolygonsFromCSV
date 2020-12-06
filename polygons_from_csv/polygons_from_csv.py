@@ -179,6 +179,10 @@ class PolygonsFromCSV:
                 action)
             self.iface.removeToolBarIcon(action)
 
+    def remove_csv_fields_assignment(self):
+        self.dlg.comboBoxFieldPolygonName.clear()
+        self.dlg.comboBoxFieldLongitude.clear()
+        self.dlg.comboBoxFieldLatitude.clear()
 
     def run(self):
         """Run method that performs all the real work"""
@@ -191,6 +195,9 @@ class PolygonsFromCSV:
 
         # show the dialog
         self.dlg.show()
+        self.dlg.mQgsFileWidgetInputFile.lineEdit().clear()
+        self.dlg.comboBoxCSVDelimiter.setCurrentIndex(0)
+        self.remove_csv_fields_assignment()
         # Run the dialog event loop
         result = self.dlg.exec_()
         # See if OK was pressed
