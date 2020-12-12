@@ -48,6 +48,7 @@ class PolygonsFromCSV:
         """
         self.csv_fields = None
         self.output_layer = None
+        self.log_path = None
         # Save reference to the QGIS interface
         self.iface = iface
         # initialize plugin directory
@@ -184,6 +185,22 @@ class PolygonsFromCSV:
                 action)
             self.iface.removeToolBarIcon(action)
 
+    def set_log_path(self, file_name):
+        """ Return full path to import log file - contains errors and not imported records from CSV file, example if
+        there is incorrect or not supported coordinate format.
+        :param file_name: str, import log file name, based on input CSV data file
+        """
+        directory = os.path.dirname(os.path.realpath(__file__))
+        self.log_path = os.path.join(directory, "{}_import.log".format(file_name))
+
+    def log_message(self, message):
+        """ Add message to import log file.
+        :param message: str, message to log
+        """
+        with open(self.log_path, 'a') as f:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            f.write("{} | {}".format(timestamp, message))
+
     def remove_csv_fields_assignment(self):
         """ Remove CSV fields from dropdown lists. """
         self.dlg.comboBoxFieldPolygonName.clear()
@@ -252,7 +269,8 @@ class PolygonsFromCSV:
         :param polygon_name: str
         :param vertices: list, list of QgsPoint - vertices to create shape of polygon
         """
-        if len(vertices) >= 3:
+        count_vertices = len(vertices)
+        if count_vertices >= 3:
             # At least 3 vertices required to create polygon
             # Check if first and last vertices have the same coordinates
             provider = self.output_layer.dataProvider()
@@ -265,14 +283,19 @@ class PolygonsFromCSV:
             polygon.setGeometry(QgsGeometry.fromPolygonXY([vertices]))
             provider.addFeature(polygon)
             self.output_layer.commitChanges()
+            self.log_message("Polygon added to output layer: polygon name ({}), vertices count ({}).\n".format(polygon_name,
+                                                                                                    len(vertices)))
         else:
-            # TODO: Handling of case when there is not enough vertices to create polygon
-            pass
+            self.log_message("Not enough vertices: Polygon name: ({}), vertices count ({}).\n".format(polygon_name, count_vertices))
 
     def create_polygons_from_csv_file(self):
         input_path = self.dlg.mQgsFileWidgetInputFile.filePath()
         if self.is_input_data_correct():
             with open(input_path, 'r') as input_file:
+                input_file_name = os.path.splitext(os.path.basename(input_path))[0]
+                self.set_log_path(input_file_name)
+                self.log_message("Importing polygons from file {} started.\n".format(input_path))
+
                 delimiter = self.dlg.comboBoxCSVDelimiter.currentText()
                 reader = csv.DictReader(input_file, delimiter=delimiter)
 
@@ -293,16 +316,23 @@ class PolygonsFromCSV:
 
                         lon = Coordinate(lon_src, AT_LONGITUDE)
                         lat = Coordinate(lat_src, AT_LATITUDE)
-                        vertex = QgsPointXY(float(lon.convert_to_dd()),
-                                            float(lat.convert_to_dd()))
+                        lon_dd = lon.convert_to_dd()
+                        lat_dd = lat.convert_to_dd()
 
-                        if polygon_name == current_polygon_name:
-                            vertices.append(vertex)
+                        if lon_dd is not None and lat_dd is not None:
+                            vertex = QgsPointXY(lon_dd, lat_dd)
+                            if polygon_name == current_polygon_name:
+                                vertices.append(vertex)
+                            else:
+                                self.create_polygon(polygon, current_polygon_name, vertices)
+                                current_polygon_name = polygon_name
+                                vertices.clear()
+                                vertices.append(vertex)
                         else:
-                            self.create_polygon(polygon, current_polygon_name, vertices)
-                            current_polygon_name = polygon_name
-                            vertices.clear()
-                            vertices.append(vertex)
+                            self.log_message("Coordinate error or coordinate "
+                                             "format no supported. Polygon name ({})  "
+                                             "longitude: ({}), latitude ({}).\n".format(polygon_name,
+                                                                                        lon_src, lat_src))
                     except StopIteration:
                         self.create_polygon(polygon, polygon_name, vertices)
                         break  # Stop iteration
