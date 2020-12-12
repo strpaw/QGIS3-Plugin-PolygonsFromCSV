@@ -47,6 +47,7 @@ class PolygonsFromCSV:
         :type iface: QgsInterface
         """
         self.csv_fields = None
+        self.output_layer = None
         # Save reference to the QGIS interface
         self.iface = iface
         # initialize plugin directory
@@ -232,18 +233,41 @@ class PolygonsFromCSV:
 
     @staticmethod
     def gen_layer_name():
-        """ Generate layer name based on timestamp
-        """
+        """ Generate layer name based on timestamp. """
         timestamp = datetime.now()
         return timestamp.strftime("%Y_%m_%d_%H%M%f")
 
-    def create_memeory_layer(self, layer_name):
-        memory_layer = QgsVectorLayer('Polygon?crs=epsg:4326', layer_name, 'memory')
-        provider = memory_layer.dataProvider()
-        memory_layer.startEditing()
+    def create_output_layer(self, layer_name):
+        """ Create output layer with polygons - memory layer. """
+        self.output_layer = QgsVectorLayer('Polygon?crs=epsg:4326', layer_name, 'memory')
+        provider = self.output_layer.dataProvider()
+        self.output_layer.startEditing()
         provider.addAttributes([QgsField("POL_NAME", QVariant.String)])
-        memory_layer.commitChanges()
-        QgsProject.instance().addMapLayer(memory_layer)
+        self.output_layer.commitChanges()
+        QgsProject.instance().addMapLayer(self.output_layer)
+
+    def create_polygon(self, polygon, polygon_name, vertices):
+        """ Create and add polygon to output layer.
+        :param polygon: QgsFeature(), feature to be created and added to output layer
+        :param polygon_name: str
+        :param vertices: list, list of QgsPoint - vertices to create shape of polygon
+        """
+        if len(vertices) >= 3:
+            # At least 3 vertices required to create polygon
+            # Check if first and last vertices have the same coordinates
+            provider = self.output_layer.dataProvider()
+            first_vertex = vertices[0]
+            last_vertex = vertices[-1]
+            if not first_vertex.compare(last_vertex):
+                vertices.append(vertices[0])
+
+            polygon.setAttributes([polygon_name])
+            polygon.setGeometry(QgsGeometry.fromPolygonXY([vertices]))
+            provider.addFeature(polygon)
+            self.output_layer.commitChanges()
+        else:
+            # TODO: Handling of case when there is not enough vertices to create polygon
+            pass
 
     def create_polygons_from_csv_file(self):
         input_path = self.dlg.mQgsFileWidgetInputFile.filePath()
@@ -253,9 +277,7 @@ class PolygonsFromCSV:
                 reader = csv.DictReader(input_file, delimiter=delimiter)
 
                 layer_name = self.gen_layer_name()
-                self.create_memeory_layer(layer_name)
-                layer = QgsProject.instance().mapLayersByName(layer_name)[0]
-                provider = layer.dataProvider()
+                self.create_output_layer(layer_name)
 
                 current_polygon_name = None
                 vertices = []
@@ -268,46 +290,21 @@ class PolygonsFromCSV:
                         polygon_name = row[self.dlg.comboBoxFieldPolygonName.currentText()]
                         lon_src = row[self.dlg.comboBoxFieldLongitude.currentText()]
                         lat_src = row[self.dlg.comboBoxFieldLatitude.currentText()]
+
                         lon = Coordinate(lon_src, AT_LONGITUDE)
                         lat = Coordinate(lat_src, AT_LATITUDE)
-
                         vertex = QgsPointXY(float(lon.convert_to_dd()),
                                             float(lat.convert_to_dd()))
 
                         if polygon_name == current_polygon_name:
                             vertices.append(vertex)
                         else:
-                            if len(vertices) >= 3:
-                                # At least 3 vertices required to create polygon
-                                # Check if first and last vertices have the same coordinates
-                                first_vertex = vertices[0]
-                                last_vertex = vertices[-1]
-                                if not first_vertex.compare(last_vertex):
-                                    vertices.append(vertices[0])
-
-                                polygon.setAttributes([current_polygon_name])
-                                polygon.setGeometry(QgsGeometry.fromPolygonXY([vertices]))
-                                provider.addFeature(polygon)
-                                layer.commitChanges()
-                            else:
-                                pass
-
+                            self.create_polygon(polygon, current_polygon_name, vertices)
                             current_polygon_name = polygon_name
                             vertices.clear()
                             vertices.append(vertex)
                     except StopIteration:
-                        if len(vertices) >= 3:
-                            first_vertex = vertices[0]
-                            last_vertex = vertices[-1]
-                            if not first_vertex.compare(last_vertex):
-                                vertices.append(vertices[0])
-
-                            polygon.setAttributes([current_polygon_name])
-                            polygon.setGeometry(QgsGeometry.fromPolygonXY([vertices]))
-                            provider.addFeature(polygon)
-                            layer.commitChanges()
-                        else:
-                            pass
+                        self.create_polygon(polygon, polygon_name, vertices)
                         break  # Stop iteration
 
     def run(self):
