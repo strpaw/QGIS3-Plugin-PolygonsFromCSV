@@ -348,6 +348,7 @@ class PolygonsFromCSV:
             self.first_start = False
             self.dlg = PolygonsFromCSVDialog()
             self.dlg.pushButtonCreatePolygons.clicked.connect(self.import_polygons_from_csv_file)
+            self.dlg.pushButtonCancel.clicked.connect(self.dlg.close)
             self.dlg.comboBoxCSVDelimiter.currentIndexChanged.connect(self.reset_csv_fields_assignment)
             self.dlg.mQgsFileWidgetInputFile.fileChanged.connect(self.reset_csv_fields_assignment)
             self.dlg.mQgsFileWidgetInputFile.setFilter('*.csv')
