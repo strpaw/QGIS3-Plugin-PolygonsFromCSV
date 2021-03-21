@@ -1,5 +1,5 @@
 import unittest
-from polygons_from_csv.aviation_gis_tools.angle import *
+from ..angle import *
 
 
 class AngleTests(unittest.TestCase):

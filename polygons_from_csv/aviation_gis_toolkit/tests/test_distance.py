@@ -1,6 +1,6 @@
 import unittest
-from polygons_from_csv.aviation_gis_tools.const import *
-from polygons_from_csv.aviation_gis_tools.distance import Distance
+from ..const import *
+from ..distance import Distance
 
 
 class DistanceTests(unittest.TestCase):

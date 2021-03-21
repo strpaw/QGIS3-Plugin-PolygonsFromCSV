@@ -3,7 +3,7 @@ angle.py
 Angle module provides common functionality for longitude, latitude and bearing angle types.
 """
 import math
-from polygons_from_csv.aviation_gis_tools.const import *
+from .const import *
 
 # Angle string representation formats
 ANGLE_STRING_FORMATS = {

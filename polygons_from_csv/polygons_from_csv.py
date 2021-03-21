@@ -50,6 +50,7 @@ class PolygonsFromCSV:
         self.csv_fields = None
         self.output_layer = None
         self.import_log_path = None
+        self.csv_data_error = ''
         # Save reference to the QGIS interface
         self.iface = iface
         # initialize plugin directory
@@ -186,12 +187,14 @@ class PolygonsFromCSV:
                 action)
             self.iface.removeToolBarIcon(action)
 
-    def set_import_log_path(self, input_csv_base_name):
+    def set_import_log_path(self, csv_path):
         """ Set full path to import log file.
-        :param input_csv_base_name:
+        :param csv_path: str, full path to CSV data file
         """
-        directory = os.path.dirname(os.path.realpath(__file__))
-        self.import_log_path = os.path.join(directory, "{}_import.log".format(input_csv_base_name))
+        directory, file_name = os.path.split(csv_path)
+        base_name = os.path.splitext(file_name)[0]
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        self.import_log_path = os.path.join(directory, "{}_Import_{}.log".format(timestamp, base_name))
 
     def log_message(self, message):
         """ Append message to import log file.
@@ -199,7 +202,24 @@ class PolygonsFromCSV:
         """
         with open(self.import_log_path, 'a') as f:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-            f.write("{} | {}".format(timestamp, message))
+            f.write("{} | {}\n".format(timestamp, message))
+
+    def open_import_log(self):
+        os.startfile(self.import_log_path)
+
+    def disable_show_import_log_file(self):
+        self.dlg.pushButtonShowImportLogFile.setEnabled(False)
+        self.dlg.pushButtonShowImportLogFile.setText("")
+
+    def enable_show_import_log_file(self):
+        self.dlg.pushButtonShowImportLogFile.setEnabled(True)
+        self.dlg.pushButtonShowImportLogFile.setText(self.import_log_path)
+
+    def initialize_csv_fields_assignment(self):
+        """ Fill in drop-down lists with CSV fields. """
+        self.dlg.comboBoxFieldPolygonName.addItems(self.csv_fields)
+        self.dlg.comboBoxFieldLongitude.addItems(self.csv_fields)
+        self.dlg.comboBoxFieldLatitude.addItems(self.csv_fields)
 
     def remove_csv_fields_assignment(self):
         """ Remove CSV fields assigned to drop-down lists. """
@@ -207,33 +227,153 @@ class PolygonsFromCSV:
         self.dlg.comboBoxFieldLongitude.clear()
         self.dlg.comboBoxFieldLatitude.clear()
 
-    def init_csv_fields_assignment(self):
-        """ Fill in drop-down lists with CSV fields. """
-        self.dlg.comboBoxFieldPolygonName.addItems(self.csv_fields)
-        self.dlg.comboBoxFieldLongitude.addItems(self.csv_fields)
-        self.dlg.comboBoxFieldLatitude.addItems(self.csv_fields)
-
-    def reset_csv_fields_assignment(self):
-        """ Read fields from CSV input file and fill drop-down lists with them if there are 3 or more
-        fields in CSV file. """
+    def get_csv_fields(self):
         input_path = self.dlg.mQgsFileWidgetInputFile.filePath()
         if os.path.isfile(input_path):
             with open(input_path, 'r') as file:
                 delimiter = self.dlg.comboBoxCSVDelimiter.currentText()
                 reader = csv.DictReader(file, delimiter=delimiter)
-                header = reader.fieldnames
-                fields_count = len(header)
-                if fields_count >= 3:
-                    self.csv_fields = header
-                    self.remove_csv_fields_assignment()
-                    self.init_csv_fields_assignment()
-                else:
-                    self.remove_csv_fields_assignment()
-                    self.csv_fields = None
-                    QMessageBox.critical(QWidget(), "Message", "At least 3 fields required!")
+                return reader.fieldnames
 
-    def is_input_data_correct(self):
-        """ Check if input data file is selected and CSV fields are assigned. """
+    def reset_csv_fields_assignment(self):
+        """ Read fields from CSV input file and fill drop-down lists with them if there are 3 or more
+        fields in CSV file. """
+        self.disable_show_import_log_file()
+        fields = self.get_csv_fields()
+        if fields:
+            fields_count = len(fields)
+            if fields_count >= 3:
+                self.csv_fields = fields
+                self.remove_csv_fields_assignment()
+                self.initialize_csv_fields_assignment()
+            else:
+                self.csv_fields = None
+                self.remove_csv_fields_assignment()
+                QMessageBox.critical(QWidget(), "Message", "At least 3 fields required!")
+
+    @staticmethod
+    def is_field_value_none(value):
+        if value is None:
+            return True
+
+    @staticmethod
+    def is_field_value_empty(value):
+        if value.strip() == '':
+            return True
+
+    def get_raw_data(self, row):
+        result = True
+        err_msg = 'ERROR | '
+        for key, value in row.items():
+            if self.is_field_value_none(value):
+                err_msg += 'Missing field {}. '.format(key)
+                result = False
+            elif self.is_field_value_empty(value):
+                err_msg += 'Empty field {}. '.format(key)
+                result = False
+        if not result:
+            self.log_message('{} {}'.format(err_msg, row))
+        else:
+            return row
+
+    def get_vertex_data(self, row):
+        raw_data = self.get_raw_data(row)
+        if raw_data:
+            polygon_name = raw_data[self.dlg.comboBoxFieldPolygonName.currentText()]
+            lon = Coordinate(raw_data[self.dlg.comboBoxFieldLongitude.currentText()], AT_LONGITUDE)
+            lat = Coordinate(raw_data[self.dlg.comboBoxFieldLatitude.currentText()], AT_LATITUDE)
+            lon_dd = lon.convert_to_dd()
+            lat_dd = lat.convert_to_dd()
+            if lon_dd is not None and lat_dd is not None:
+                vertex = QgsPointXY(lon_dd, lat_dd)
+                return polygon_name, vertex
+            else:
+                self.log_message("ERROR | Invalid coordinate(s) or coordinate(s) "
+                                 "format not supported "
+                                 "{}.".format(raw_data))
+
+    @staticmethod
+    def generate_layer_name():
+        """ Generate layer name based on timestamp. """
+        timestamp = datetime.now()
+        return timestamp.strftime("%Y_%m_%d_%H%M%f")
+
+    def create_output_layer(self, layer_name):
+        """ Create output layer with polygons - memory layer. """
+        self.output_layer = QgsVectorLayer('Polygon?crs=epsg:4326', layer_name, 'memory')
+        provider = self.output_layer.dataProvider()
+        self.output_layer.startEditing()
+        provider.addAttributes([QgsField("POL_NAME", QVariant.String, len=100)])
+        self.output_layer.commitChanges()
+        QgsProject.instance().addMapLayer(self.output_layer)
+
+    def create_polygon(self, polygon, polygon_name, vertices):
+        """ Create and add polygon to output layer.
+        :param polygon: QgsFeature(), feature to be created and added to output layer
+        :param polygon_name: str
+        :param vertices: list, list of QgsPoint - vertices to create shape of polygon
+        """
+        if polygon_name:
+            vertices_number = len(vertices)
+            if vertices_number >= 3:
+                # At least 3 vertices required to create polygon
+                # Check if first and last vertices have the same coordinates
+                first_vertex = vertices[0]
+                last_vertex = vertices[-1]
+                if not first_vertex.compare(last_vertex):
+                    vertices.append(vertices[0])
+
+                polygon.setAttributes([polygon_name])
+                polygon.setGeometry(QgsGeometry.fromPolygonXY([vertices]))
+                provider = self.output_layer.dataProvider()
+                provider.addFeature(polygon)
+                self.output_layer.commitChanges()
+                self.log_message("INFO | Polygon added to output layer. "
+                                 "Polygon {}, vertices count {}.".format(polygon_name, len(vertices)))
+            else:
+                self.log_message("ERROR | Not enough vertices. "
+                                 "Polygon {}, vertices count {}.".format(polygon_name, vertices_number))
+
+    def import_polygons_from_csv_file(self):
+        """ Read CSV file, create polygons and and them to output layer. """
+        input_path = self.dlg.mQgsFileWidgetInputFile.filePath()
+
+        if self.is_plugin_form_data_correct():
+            delimiter = self.dlg.comboBoxCSVDelimiter.currentText()
+            self.set_import_log_path(input_path)
+            self.log_message("INFO | Importing polygons from file {} started.".format(input_path))
+            layer_name = self.generate_layer_name()
+            self.create_output_layer(layer_name)
+
+            with open(input_path, 'r') as input_file:
+                reader = csv.DictReader(input_file, delimiter=delimiter)
+
+                current_polygon_name = None
+                polygon_name = None
+                vertices = []
+                polygon = QgsFeature()
+
+                while True:
+                    try:
+                        row = next(reader)
+                        vertex_data = self.get_vertex_data(row)
+                        if vertex_data:
+                            polygon_name, vertex = vertex_data
+                            if polygon_name == current_polygon_name:
+                                vertices.append(vertex)
+                            else:
+                                self.create_polygon(polygon, current_polygon_name, vertices)
+                                current_polygon_name = polygon_name
+                                vertices.clear()
+                                vertices.append(vertex)
+                    except StopIteration:
+                        self.create_polygon(polygon, polygon_name, vertices)
+                        self.enable_show_import_log_file()
+                        break  # Stop iteration
+
+    def is_plugin_form_data_correct(self):
+        """ Check if input data in plugin form is correct, example: input file is selected """
+        self.disable_show_import_log_file()
         input_path = self.dlg.mQgsFileWidgetInputFile.filePath()
         if input_path.strip() == "":
             QMessageBox.critical(QWidget(), "Message", "Select input CSV file!")
@@ -248,97 +388,6 @@ class PolygonsFromCSV:
         else:
             QMessageBox.critical(QWidget(), "Message", "{} is not a file!".format(input_path))
 
-    @staticmethod
-    def gen_layer_name():
-        """ Generate layer name based on timestamp. """
-        timestamp = datetime.now()
-        return timestamp.strftime("%Y_%m_%d_%H%M%f")
-
-    def create_output_layer(self, layer_name):
-        """ Create output layer with polygons - memory layer. """
-        self.output_layer = QgsVectorLayer('Polygon?crs=epsg:4326', layer_name, 'memory')
-        provider = self.output_layer.dataProvider()
-        self.output_layer.startEditing()
-        provider.addAttributes([QgsField("POL_NAME", QVariant.String)])
-        self.output_layer.commitChanges()
-        QgsProject.instance().addMapLayer(self.output_layer)
-
-    def create_polygon(self, polygon, polygon_name, vertices):
-        """ Create and add polygon to output layer.
-        :param polygon: QgsFeature(), feature to be created and added to output layer
-        :param polygon_name: str
-        :param vertices: list, list of QgsPoint - vertices to create shape of polygon
-        """
-        count_vertices = len(vertices)
-        if count_vertices >= 3:
-            # At least 3 vertices required to create polygon
-            # Check if first and last vertices have the same coordinates
-            first_vertex = vertices[0]
-            last_vertex = vertices[-1]
-            if not first_vertex.compare(last_vertex):
-                vertices.append(vertices[0])
-
-            polygon.setAttributes([polygon_name])
-            polygon.setGeometry(QgsGeometry.fromPolygonXY([vertices]))
-            provider = self.output_layer.dataProvider()
-            provider.addFeature(polygon)
-            self.output_layer.commitChanges()
-            self.log_message("Polygon added to output layer: "
-                             "polygon name ({}), vertices count ({}).\n".format(polygon_name, len(vertices)))
-        else:
-            self.log_message("Not enough vertices: Polygon name: "
-                             "({}), vertices count ({}).\n".format(polygon_name, count_vertices))
-
-    def import_polygons_from_csv_file(self):
-        """ Read CSV file, create polygons and and them to output layer. """
-        input_path = self.dlg.mQgsFileWidgetInputFile.filePath()
-        if self.is_input_data_correct():
-            with open(input_path, 'r') as input_file:
-                input_file_name = os.path.splitext(os.path.basename(input_path))[0]
-                self.set_import_log_path(input_file_name)
-                self.log_message("Importing polygons from file {} started.\n".format(input_path))
-
-                delimiter = self.dlg.comboBoxCSVDelimiter.currentText()
-                reader = csv.DictReader(input_file, delimiter=delimiter)
-
-                layer_name = self.gen_layer_name()
-                self.create_output_layer(layer_name)
-
-                current_polygon_name = None
-                vertices = []
-                polygon = QgsFeature()
-
-                while True:
-                    try:
-                        row = next(reader)
-
-                        polygon_name = row[self.dlg.comboBoxFieldPolygonName.currentText()]
-                        lon_src = row[self.dlg.comboBoxFieldLongitude.currentText()]
-                        lat_src = row[self.dlg.comboBoxFieldLatitude.currentText()]
-                        
-                        lon = Coordinate(lon_src, AT_LONGITUDE)
-                        lat = Coordinate(lat_src, AT_LATITUDE)
-                        lon_dd = lon.convert_to_dd()
-                        lat_dd = lat.convert_to_dd()
-
-                        if lon_dd is not None and lat_dd is not None:
-                            vertex = QgsPointXY(lon_dd, lat_dd)
-                            if polygon_name == current_polygon_name:
-                                vertices.append(vertex)
-                            else:
-                                self.create_polygon(polygon, current_polygon_name, vertices)
-                                current_polygon_name = polygon_name
-                                vertices.clear()
-                                vertices.append(vertex)
-                        else:
-                            self.log_message("Coordinate error or coordinate "
-                                             "format not supported. Polygon name ({})  "
-                                             "longitude: ({}), latitude ({}).\n".format(polygon_name,
-                                                                                        lon_src, lat_src))
-                    except StopIteration:
-                        self.create_polygon(polygon, polygon_name, vertices)
-                        break  # Stop iteration
-
     def run(self):
         """Run method that performs all the real work"""
 
@@ -347,8 +396,10 @@ class PolygonsFromCSV:
         if self.first_start == True:
             self.first_start = False
             self.dlg = PolygonsFromCSVDialog()
+            self.disable_show_import_log_file()
             self.dlg.pushButtonCreatePolygons.clicked.connect(self.import_polygons_from_csv_file)
             self.dlg.pushButtonCancel.clicked.connect(self.dlg.close)
+            self.dlg.pushButtonShowImportLogFile.clicked.connect(self.open_import_log)
             self.dlg.comboBoxCSVDelimiter.currentIndexChanged.connect(self.reset_csv_fields_assignment)
             self.dlg.mQgsFileWidgetInputFile.fileChanged.connect(self.reset_csv_fields_assignment)
             self.dlg.mQgsFileWidgetInputFile.setFilter('*.csv')

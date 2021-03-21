@@ -1,7 +1,7 @@
 # Speed units
 SPEED_MS = 'm/s' # Meters per hour
 SPEED_KMH = 'km/h'  # Kilometers per hour
-SPEED_KT = 'kt'  # Knotes = 1 nautical mile per hour
+SPEED_KT = 'kt'  # Knots = 1 nautical mile per hour
 
 
 def speed_to_ms(speed, unit):
